@@ -47,14 +47,14 @@ tasks.register<Zip>("buildPlugin") {
     group = "build"
     description = "Builds Cloudstream plugin as .cs3"
 
-    // ✅ AGP 8+ stores AAR directly in outputs/aar/
+    // ✅ Take the release AAR from AGP 8+
     from(layout.buildDirectory.dir("outputs/aar")) {
         include("*-release.aar") // Only include release AAR
     }
 
-    // Output file name and destination folder
+    // ✅ Output directly in project root
     archiveFileName.set("${project.name}.cs3")
-    destinationDirectory.set(layout.buildDirectory.dir("libs"))
+    destinationDirectory.set(layout.projectDirectory)
 }
 
 // ✅ Task to create the .jar file for Cloudstream
@@ -66,9 +66,9 @@ tasks.register<Jar>("buildJar") {
     from(layout.buildDirectory.dir("intermediates/javac/release/classes"))
     from(layout.buildDirectory.dir("tmp/kotlin-classes/release"))
 
-    // Output file name and destination folder
+    // ✅ Output directly in project root
     archiveFileName.set("${project.name}.jar")
-    destinationDirectory.set(layout.buildDirectory.dir("libs"))
+    destinationDirectory.set(layout.projectDirectory)
 }
 
 // ✅ Automatically create .cs3 and .jar after assembleRelease
