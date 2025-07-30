@@ -1,6 +1,5 @@
 package com.md61421
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.extractors.Filesim
 import com.lagradost.cloudstream3.utils.ExtractorApi
@@ -8,6 +7,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.utils.JsUnpacker
 import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.getPacked
@@ -36,30 +36,20 @@ open class Cybervynx : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        var response = app.get(url.replace("/download/", "/e/"), referer = referer)
-        val iframe = response.document.selectFirst("iframe")
-        if (iframe != null) {
-            response = app.get(
-                iframe.attr("src"), headers = mapOf(
-                    "Accept-Language" to "en-US,en;q=0.5",
-                    "Sec-Fetch-Dest" to "iframe"
-                ), referer = response.url
-            )
-        }
+        val embedUrl = url.replace("/download/", "/e/")
+        val response = app.get(embedUrl, referer = referer)
 
-        val script = if (!getPacked(response.text).isNullOrEmpty()) {
+        val scriptData = getPacked(response.text)?.takeIf { it.isNotEmpty() }?.let {
             getAndUnpack(response.text)
-        } else {
-            response.document.selectFirst("script:containsData(sources:)")?.data()
-        } ?: return
-        Log.d("Phisher script",script)
-        val m3u8 =
-            Regex("\"hls2\":\"(.*?)\"").find(script)?.groupValues?.getOrNull(1)
-        Log.d("Phisher script",m3u8.toString())
+        } ?: response.document.selectFirst("script:containsData(sources:)")?.data()
 
+        if (scriptData.isNullOrEmpty()) return
+
+        val m3u8Url = Regex("\"hls2\":\"(.*?)\"").find(scriptData)?.groupValues?.getOrNull(1)
+        if (m3u8Url.isNullOrBlank()) return
         generateM3u8(
             name,
-            m3u8 ?: return,
+            m3u8Url,
             mainUrl
         ).forEach(callback)
     }
@@ -120,49 +110,37 @@ open class AWSStream : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val scriptData = app.get(url, referer = referer)
+        val evalContent = app.get(url, referer = referer)
             .document
             .selectFirst("script:containsData(function(p,a,c,k,e,d))")
             ?.data() ?: return
 
-        val extractedHash = Regex("/cdn/down/([a-f0-9]{32})/").find(scriptData)
-            ?.groupValues?.getOrNull(1)
-
+        val evalRegex = Regex("""eval\(.*""", RegexOption.DOT_MATCHES_ALL)
+        val matchedEval = evalRegex.find(evalContent)?.value ?: return
+        val scriptData = JsUnpacker(matchedEval).unpack().toString()
+        val extractedHash = scriptData.substringAfter("cdn\\\\/down\\\\/").substringBefore("\\")
         val subtitleUrl = Regex("""playerjsSubtitle\s*=\s*"(?:\[.*?])?(https?://[^"]+\.srt)"""").find(scriptData)?.groupValues?.getOrNull(1)
-        Log.d("Phisher",subtitleUrl.toString())
-        if (extractedHash != null) {
-            val m3u8Url = "$API/cdn/hls/$extractedHash/master.txt"
+        val m3u8Url = "$API/cdn/hls/$extractedHash/master.txt"
 
-            callback(
-                newExtractorLink(
-                    name,
-                    name,
-                    url = m3u8Url,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = referer ?: ""
-                    this.quality = Qualities.P1080.value
-                }
-            )
-
-            if (subtitleUrl != null) {
-                subtitleCallback(
-                    SubtitleFile(
-                        "English",
-                        subtitleUrl
-                    )
-                )
+        callback(
+            newExtractorLink(
+                name,
+                name,
+                url = m3u8Url,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = referer ?: ""
+                this.quality = Qualities.P1080.value
             }
+        )
+
+        if (subtitleUrl != null) {
+            subtitleCallback(
+                SubtitleFile(
+                    "English",
+                    subtitleUrl
+                )
+            )
         }
     }
 }
-
-data class Response(
-    val hls: Boolean,
-    val videoImage: String,
-    val videoSource: String,
-    val securedLink: String,
-    val downloadLinks: List<Any?>,
-    val attachmentLinks: List<Any?>,
-    val ck: String,
-)
